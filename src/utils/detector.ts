@@ -25,39 +25,57 @@ export const SAR_ESSENTIAL_CLASSES = new Set([
 let modelInstance: cocoSsd.ObjectDetection | null = null;
 let isLoading = false;
 
-export async function initModel(onStatus?: (status: string) => void): Promise<cocoSsd.ObjectDetection> {
-  if (modelInstance) return modelInstance;
+export async function initModel(
+  onStatus?: (status: string) => void,
+  forceCpu: boolean = false
+): Promise<cocoSsd.ObjectDetection> {
+  if (modelInstance && !forceCpu) return modelInstance;
+
   if (isLoading) {
     while (isLoading) {
       await new Promise(r => setTimeout(r, 100));
     }
-    if (modelInstance) return modelInstance;
+    if (modelInstance && !forceCpu) return modelInstance;
   }
 
   isLoading = true;
   try {
-    onStatus?.('Initializing WebGL GPU accelerator...');
     await tf.ready();
-    
-    // Attempt WebGL, fallback gracefully to CPU if not supported
-    try {
-      await tf.setBackend('webgl');
-      console.log('[Vision Engine] Using WebGL hardware acceleration');
-    } catch {
+
+    if (forceCpu) {
       await tf.setBackend('cpu');
-      console.warn('[Vision Engine] WebGL unavailable, falling back to CPU');
+      console.log('[Vision Engine] Hardware engine: CPU Mode (User Selected)');
+      onStatus?.('Engine: CPU Mode active');
+    } else {
+      try {
+        await tf.setBackend('webgl');
+        console.log('[Vision Engine] Hardware acceleration: WebGL');
+      } catch {
+        await tf.setBackend('cpu');
+        console.warn('[Vision Engine] WebGL unsupported, using CPU');
+      }
     }
 
-    onStatus?.('Loading COCO-SSD Neural Network (MobileNet V2)...');
+    onStatus?.('Loading Neural Weights (lite_mobilenet_v2)...');
     modelInstance = await cocoSsd.load({
-      base: 'mobilenet_v2',
+      base: 'lite_mobilenet_v2',
     });
-    
-    onStatus?.('Vision AI Ready');
+
+    const activeBackend = tf.getBackend()?.toUpperCase() || 'GPU';
+    onStatus?.(`Vision AI Ready (${activeBackend})`);
     return modelInstance;
   } finally {
     isLoading = false;
   }
+}
+
+export async function reloadModel(
+  forceCpu: boolean = false,
+  onStatus?: (status: string) => void
+): Promise<cocoSsd.ObjectDetection> {
+  modelInstance = null;
+  isLoading = false;
+  return initModel(onStatus, forceCpu);
 }
 
 export async function detectFrame(

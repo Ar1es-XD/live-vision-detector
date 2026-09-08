@@ -3,7 +3,7 @@ import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import { Detection, FilterCategory, detectFrame } from '../utils/detector';
 import { TacticalHUD } from './TacticalHUD';
 import { DroneTelemetry, getSimulatedTelemetry } from '../utils/sarTelemetry';
-import { Camera, Video, Upload, AlertCircle, RefreshCw } from 'lucide-react';
+import { Camera, Video, Upload, AlertCircle, RefreshCw, Radio } from 'lucide-react';
 
 interface VideoPlayerProps {
   model: cocoSsd.ObjectDetection | null;
@@ -102,7 +102,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [videoSourceType, startWebcam, stopWebcam]);
 
-  // 3. Procedural Aerial Drone Simulation Loop (when camera is disabled/in simulation mode)
+  // 3. Procedural Aerial Drone Simulation Loop
   useEffect(() => {
     if (videoSourceType !== 'simulation') return;
 
@@ -120,31 +120,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const renderSim = () => {
       simTick += 1;
 
-      // Draw synthetic disaster flood / wilderness terrain
-      ctx.fillStyle = '#1e293b'; // Muddy terrain
+      // Synthetic satellite wilderness flood terrain
+      ctx.fillStyle = '#0f172a';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Floodwater body
-      ctx.fillStyle = '#0f3a53';
+      // Flooded lake / river basin
+      ctx.fillStyle = '#092537';
       ctx.beginPath();
       ctx.ellipse(640, 360, 480, 260, 0.2, 0, Math.PI * 2);
       ctx.fill();
 
-      // Water ripples
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.2)';
-      ctx.lineWidth = 2;
+      // Sonar / sensor scan sweeps
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.15)';
+      ctx.lineWidth = 1.5;
       for (let i = 0; i < 4; i++) {
-        const r = ((simTick * 2 + i * 80) % 300) + 50;
+        const r = ((simTick * 2 + i * 80) % 320) + 40;
         ctx.beginPath();
         ctx.arc(640, 360, r, 0, Math.PI * 2);
         ctx.stroke();
       }
 
-      // 1. Simulated stranded civilian on rooftop/island (Person)
+      // 1. Stranded civilian survivor
       const personX = 580 + Math.sin(simTick * 0.02) * 15;
       const personY = 320 + Math.cos(simTick * 0.02) * 10;
-      // Body
-      ctx.fillStyle = '#ef4444'; // Orange/Red jacket
+      // Jacket
+      ctx.fillStyle = '#ef4444';
       ctx.beginPath();
       ctx.arc(personX, personY, 18, 0, Math.PI * 2);
       ctx.fill();
@@ -154,7 +154,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       ctx.arc(personX, personY - 8, 8, 0, Math.PI * 2);
       ctx.fill();
 
-      // 2. Simulated rescue boat
+      // 2. Rescue response boat
       const boatX = 350 + (simTick * 1.2) % 600;
       const boatY = 420 + Math.sin(simTick * 0.05) * 12;
       ctx.fillStyle = '#f59e0b';
@@ -162,7 +162,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       ctx.ellipse(boatX, boatY, 35, 14, -0.1, 0, Math.PI * 2);
       ctx.fill();
 
-      // 3. Simulated vehicle on embankment (Car)
+      // 3. Transport vehicle
       ctx.fillStyle = '#475569';
       ctx.fillRect(850, 180, 70, 35);
       ctx.fillStyle = '#94a3b8';
@@ -236,9 +236,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   return (
-    <div className="relative w-full rounded-2xl overflow-hidden border border-gray-800 bg-black shadow-2xl">
-      {/* Video / Canvas Ingestion */}
-      <div ref={containerRef} className="relative aspect-video w-full bg-black flex items-center justify-center">
+    <div className="relative w-full rounded-3xl overflow-hidden glass-surface-elevated shadow-2xl transition-all">
+      {/* Video Viewfinder Viewport */}
+      <div ref={containerRef} className="relative aspect-video w-full bg-black flex items-center justify-center overflow-hidden">
         {videoSourceType === 'simulation' ? (
           <canvas
             ref={simCanvasRef}
@@ -254,6 +254,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           />
         )}
 
+        {/* Floating Top Viewfinder Pill Indicators */}
+        <div className="absolute top-4 left-4 z-20 flex items-center gap-2 pointer-events-none">
+          <div className="glass-pill px-3 py-1 rounded-full flex items-center gap-2 text-[11px] font-semibold text-white/90 shadow-md">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+            </span>
+            <span className="mono-metric tracking-wider uppercase">
+              {videoSourceType === 'webcam' ? 'OPTICAL LIVE' : videoSourceType === 'simulation' ? 'SYNTHETIC SIM' : 'STREAM FILE'}
+            </span>
+          </div>
+
+          <div className="glass-pill px-2.5 py-1 rounded-full text-[11px] mono-metric font-medium text-emerald-400 shadow-md hidden sm:flex items-center gap-1.5">
+            <Radio className="w-3 h-3 animate-pulse" />
+            <span>{Math.round(fps)} FPS</span>
+          </div>
+        </div>
+
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-2 pointer-events-none">
+          <div className="glass-pill px-3 py-1 rounded-full text-[11px] mono-metric font-medium text-white/75 shadow-md">
+            <span>{streamDimensions.width}×{streamDimensions.height}</span>
+          </div>
+        </div>
+
         {/* Tactical HUD Overlay Layer */}
         <TacticalHUD
           detections={detections}
@@ -264,62 +288,69 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           fps={fps}
         />
 
-        {/* Camera Permission Warning Banner */}
+        {/* Camera Permission Alert (Apple Modal Style) */}
         {cameraError && videoSourceType === 'webcam' && (
-          <div className="absolute inset-0 bg-gray-950/90 flex flex-col items-center justify-center p-6 text-center z-30">
-            <AlertCircle className="w-14 h-14 text-amber-500 mb-3 animate-pulse" />
-            <h3 className="text-xl font-bold text-white mb-2">Camera Access Notice</h3>
-            <p className="text-gray-400 max-w-md mb-5 text-sm">{cameraError}</p>
-            <div className="flex gap-3">
-              <button
-                onClick={startWebcam}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-semibold transition"
-              >
-                <RefreshCw className="w-4 h-4" /> Retry Camera
-              </button>
-              <button
-                onClick={() => onSourceChange('simulation')}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-lg text-sm font-semibold transition border border-gray-700"
-              >
-                <Video className="w-4 h-4 text-emerald-400" /> Switch to Drone Simulation
-              </button>
+          <div className="absolute inset-0 bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-30">
+            <div className="glass-surface-elevated max-w-md p-6 rounded-3xl flex flex-col items-center border border-white/10 shadow-2xl">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-400/30 flex items-center justify-center mb-3">
+                <AlertCircle className="w-6 h-6 text-amber-400" />
+              </div>
+              <h3 className="text-base font-bold text-white mb-1.5 subheadline">Camera Access Required</h3>
+              <p className="text-white/60 text-xs mb-5 leading-relaxed">{cameraError}</p>
+              <div className="flex flex-col sm:flex-row gap-2.5 w-full">
+                <button
+                  onClick={startWebcam}
+                  className="tap-feedback flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold shadow-md transition"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Retry Camera
+                </button>
+                <button
+                  onClick={() => onSourceChange('simulation')}
+                  className="tap-feedback flex-1 flex items-center justify-center gap-2 px-4 py-2.5 glass-pill hover:bg-white/10 text-white rounded-xl text-xs font-semibold transition"
+                >
+                  <Video className="w-3.5 h-3.5 text-emerald-400" /> Switch to Sim
+                </button>
+              </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Source Switcher Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-gray-900 border-t border-gray-800">
-        <div className="flex items-center gap-2 text-xs font-medium text-gray-400">
-          <span>INPUT FEED:</span>
-          <div className="inline-flex rounded-lg bg-gray-950 p-1 border border-gray-800">
+      {/* Floating Apple Camera Control Strip */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 bg-black/40 border-t border-white/8 backdrop-blur-md">
+        <div className="flex items-center gap-2.5 text-xs text-white/60 font-medium">
+          <span className="mono-metric text-[11px] tracking-wider text-white/40">FEED:</span>
+          {/* Apple Segmented Switcher */}
+          <div className="inline-flex rounded-2xl bg-black/50 p-1 border border-white/8 shadow-inner">
             <button
               onClick={() => onSourceChange('webcam')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition ${
+              className={`tap-feedback flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all ${
                 videoSourceType === 'webcam'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-white/20 text-white shadow-sm border-t border-white/20 font-semibold'
+                  : 'text-white/60 hover:text-white hover:bg-white/5'
               }`}
             >
-              <Camera className="w-3.5 h-3.5" /> Live Webcam
+              <Camera className="w-3.5 h-3.5" />
+              <span>Webcam</span>
             </button>
             <button
               onClick={() => onSourceChange('simulation')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition ${
+              className={`tap-feedback flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all ${
                 videoSourceType === 'simulation'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-white/20 text-white shadow-sm border-t border-white/20 font-semibold'
+                  : 'text-white/60 hover:text-white hover:bg-white/5'
               }`}
             >
-              <Video className="w-3.5 h-3.5" /> Aerial Drone Sim
+              <Video className="w-3.5 h-3.5" />
+              <span>Drone Sim</span>
             </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-xs font-medium cursor-pointer transition border border-gray-700">
+        <div className="flex items-center gap-2.5">
+          <label className="tap-feedback glass-pill hover:bg-white/10 text-white/90 px-3.5 py-1.5 rounded-2xl text-xs font-medium cursor-pointer transition flex items-center gap-1.5 shadow-sm">
             <Upload className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Upload Drone Clip</span>
+            <span>Upload Flight Video</span>
             <input
               type="file"
               accept="video/*,image/*"
@@ -332,3 +363,4 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     </div>
   );
 };
+

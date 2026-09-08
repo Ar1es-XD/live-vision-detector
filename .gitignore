@@ -36,3 +36,4 @@ venv/
 .venv/
 captures/
 *.pt
+.vercel

@@ -2,11 +2,130 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer utilities {
-  .radar-grid {
-    background-size: 30px 30px;
-    background-image: 
-      linear-gradient(to right, rgba(16, 185, 129, 0.07) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(16, 185, 129, 0.07) 1px, transparent 1px);
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Apple Design Typography - Optical Sizing & Leading */
+.display-title {
+  letter-spacing: -0.028em;
+  line-height: 1.12;
+}
+
+.subheadline {
+  letter-spacing: -0.015em;
+  line-height: 1.35;
+}
+
+.mono-metric {
+  font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0.035em;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Glassmorphism & Translucent Depth */
+.glass-surface {
+  background: rgba(18, 22, 28, 0.65);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.glass-surface-elevated {
+  background: rgba(26, 32, 42, 0.78);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid rgba(255, 255, 255, 0.24);
+  box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.glass-pill {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+/* Zero-Latency Tactile Response */
+.tap-feedback {
+  transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, opacity 120ms ease;
+  will-change: transform;
+}
+
+.tap-feedback:active {
+  transform: scale(0.965);
+  opacity: 0.9;
+}
+
+/* Apple Slider Styling */
+input[type="range"].apple-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 24px;
+}
+
+input[type="range"].apple-slider:focus {
+  outline: none;
+}
+
+input[type="range"].apple-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+  transition: background 150ms ease;
+}
+
+input[type="range"].apple-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: -7px;
+  background: #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 0, 0, 0.1);
+  transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 150ms ease;
+}
+
+input[type="range"].apple-slider:active::-webkit-slider-thumb {
+  transform: scale(1.18);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4), 0 0 0 2px rgba(16, 185, 129, 0.5);
+}
+
+/* Radar & Viewfinder Grid */
+.viewfinder-grid {
+  background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+}
+
+/* Reduced Motion & High Contrast Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .tap-feedback,
+  .tap-feedback:active,
+  input[type="range"].apple-slider::-webkit-slider-thumb {
+    transform: none !important;
+    transition: opacity 100ms ease !important;
+  }
+  
+  .animate-pulse,
+  .animate-bounce {
+    animation: none !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .glass-surface,
+  .glass-surface-elevated {
+    background: #090c10 !important;
+    border: 1px solid #ffffff !important;
   }
 }

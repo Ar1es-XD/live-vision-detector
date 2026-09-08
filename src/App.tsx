@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
-import { initModel, FilterCategory, Detection } from './utils/detector';
+import { initModel, reloadModel, FilterCategory, Detection } from './utils/detector';
 import { DroneTelemetry, getSimulatedTelemetry } from './utils/sarTelemetry';
 import { VideoPlayer } from './components/VideoPlayer';
 import { ControlBar } from './components/ControlBar';
@@ -13,22 +13,45 @@ import {
   CheckCircle2, 
   Activity,
   Flame,
-  LifeBuoy
+  LifeBuoy,
+  Volume2,
+  VolumeX,
+  Search,
+  X,
+  AlertTriangle
 } from 'lucide-react';
+
+const COCO_CLASSES = [
+  'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
+  'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
+  'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack',
+  'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
+  'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+  'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+  'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
+  'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
+  'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
+  'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+];
 
 export const App: React.FC = () => {
   const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
   const [modelStatus, setModelStatus] = useState<string>('Initializing Neural Net...');
   const [isModelReady, setIsModelReady] = useState<boolean>(false);
+  const [showCpuPrompt, setShowCpuPrompt] = useState<boolean>(false);
 
   const [confidence, setConfidence] = useState<number>(0.35);
   const [filterCategory, setFilterCategory] = useState<FilterCategory>('all');
   const [sarMode, setSarMode] = useState<boolean>(false);
   const [videoSourceType, setVideoSourceType] = useState<'webcam' | 'simulation' | 'upload'>('webcam');
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
 
   const [currentDetections, setCurrentDetections] = useState<Detection[]>([]);
   const [currentTelemetry, setCurrentTelemetry] = useState<DroneTelemetry>(getSimulatedTelemetry(0));
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
+  const lastPingTime = useRef<number>(0);
 
   // Initialize TensorFlow.js and COCO-SSD
   useEffect(() => {
@@ -36,7 +59,6 @@ export const App: React.FC = () => {
       .then((loadedModel) => {
         setModel(loadedModel);
         setIsModelReady(true);
-        setModelStatus('Neural Engine Active (WebGL Accelerated)');
       })
       .catch((err) => {
         console.error('Failed to load model:', err);
@@ -44,40 +66,138 @@ export const App: React.FC = () => {
       });
   }, []);
 
+  // 3-Minute Timer: Prompt user to switch to CPU if model hasn't loaded after 3 minutes
+  useEffect(() => {
+    if (isModelReady) {
+      setShowCpuPrompt(false);
+      return;
+    }
+
+    const threeMinutesMs = 3 * 60 * 1000;
+    const timer = setTimeout(() => {
+      if (!isModelReady) {
+        setShowCpuPrompt(true);
+      }
+    }, threeMinutesMs);
+
+    return () => clearTimeout(timer);
+  }, [isModelReady]);
+
+  const handleSwitchToCpu = () => {
+    setShowCpuPrompt(false);
+    setModel(null);
+    setIsModelReady(false);
+    setModelStatus('Switching to CPU engine...');
+    reloadModel(true, s => setModelStatus(s))
+      .then(m => {
+        setModel(m);
+        setIsModelReady(true);
+      })
+      .catch(err => {
+        console.error('CPU fallback error:', err);
+        setModelStatus('Failed to load model on CPU.');
+      });
+  };
+
+  // Multimodal Tactile Audio Alert for SAR Target Lock
+  useEffect(() => {
+    if (!sarMode || !soundEnabled) return;
+    const hasVictim = currentDetections.some(d => d.class.toLowerCase() === 'person');
+    const now = Date.now();
+
+    if (hasVictim && now - lastPingTime.current > 2000) {
+      lastPingTime.current = now;
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.08);
+          gain.gain.setValueAtTime(0.05, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.15);
+        }
+      } catch {
+        // AudioContext restricted before gesture
+      }
+    }
+  }, [currentDetections, sarMode, soundEnabled]);
+
+  const filteredClasses = COCO_CLASSES.filter(c => 
+    c.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col font-sans">
-      {/* Top Navigation Header */}
-      <header className="border-b border-gray-800/80 bg-gray-950/80 backdrop-blur-md sticky top-0 z-40 px-6 py-3.5 flex items-center justify-between">
+    <div className="min-h-screen bg-[#07090e] text-white flex flex-col font-sans selection:bg-emerald-500/30 selection:text-emerald-200">
+      {/* Top Apple-style Frosted Header */}
+      <header className="glass-surface sticky top-0 z-40 px-6 py-3.5 flex items-center justify-between transition-all">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-900/30">
-            <Radio className="w-5 h-5 text-black animate-pulse" />
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-500 via-teal-500 to-cyan-400 p-[1px] shadow-lg shadow-emerald-950/40">
+            <div className="w-full h-full bg-[#0b0e14] rounded-2xl flex items-center justify-center">
+              <Radio className="w-4.5 h-4.5 text-emerald-400 animate-pulse" />
+            </div>
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="font-extrabold text-base tracking-tight text-white">
+              <h1 className="display-title font-bold text-base tracking-tight text-white">
                 AeroVision <span className="text-emerald-400">SAR</span>
               </h1>
-              <span className="px-2 py-0.5 text-[10px] font-mono uppercase bg-emerald-950 text-emerald-300 border border-emerald-800 rounded-md">
-                Live Drone AI
+              <span className="glass-pill px-2 py-0.5 text-[10px] mono-metric font-semibold text-emerald-300 rounded-full">
+                UAV AI v2
               </span>
             </div>
-            <p className="text-xs text-gray-400 hidden sm:block">
-              Real-Time Visual Object Classifier & Disaster Rescue Tracking
+            <p className="text-[11px] text-white/50 subheadline hidden sm:block">
+              Tactical Real-Time Computer Vision & Monocular Geolocation
             </p>
           </div>
         </div>
 
-        {/* Engine Status & Badges */}
-        <div className="flex items-center gap-3">
-          <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-gray-900 border border-gray-800 rounded-lg text-xs">
-            <Cpu className="w-3.5 h-3.5 text-teal-400" />
-            <span className="text-gray-400 font-mono">{modelStatus}</span>
-            {isModelReady && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
+        {/* Engine Status Capsule & Quick Actions */}
+        <div className="flex items-center gap-2.5">
+          {/* Dynamic Island Model Status */}
+          <div className="flex items-center gap-2 px-3 py-1.5 glass-pill rounded-full text-xs">
+            <Cpu className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+            <span className="text-white/80 mono-metric text-[11px] max-w-[170px] sm:max-w-none truncate">{modelStatus}</span>
+            {isModelReady ? (
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            ) : (
+              <button
+                onClick={() => {
+                  setModel(null);
+                  setIsModelReady(false);
+                  reloadModel(true, s => setModelStatus(s))
+                    .then(m => { setModel(m); setIsModelReady(true); })
+                    .catch(() => setModelStatus('CPU fallback failed'));
+                }}
+                className="tap-feedback px-2 py-0.5 rounded-md bg-amber-500/25 hover:bg-amber-500/35 text-amber-200 text-[10px] font-semibold border border-amber-400/30 shrink-0"
+                title="Force CPU Fallback if WebGL hangs"
+              >
+                Force CPU
+              </button>
+            )}
           </div>
 
+          {/* Sound Toggle */}
+          <button
+            onClick={() => setSoundEnabled(!soundEnabled)}
+            className={`tap-feedback p-2 glass-pill rounded-xl text-xs font-semibold transition ${
+              soundEnabled ? 'text-emerald-400' : 'text-white/40'
+            }`}
+            title={soundEnabled ? 'Mute Alert Audio' : 'Unmute Alert Audio'}
+          >
+            {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+          </button>
+
+          {/* Docs / Classes Modal Trigger */}
           <button
             onClick={() => setShowInfoModal(!showInfoModal)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-800 rounded-lg text-xs font-semibold transition"
+            className="tap-feedback flex items-center gap-1.5 px-3.5 py-1.5 glass-pill hover:bg-white/10 text-white/90 rounded-xl text-xs font-semibold transition"
           >
             <Info className="w-3.5 h-3.5 text-emerald-400" />
             <span className="hidden sm:inline">Classes & Docs</span>
@@ -87,25 +207,62 @@ export const App: React.FC = () => {
 
       {/* Main Viewport Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-5">
-        {/* Disaster Mode Alert Banner */}
-        {sarMode && (
-          <div className="flex items-center justify-between p-3.5 bg-red-950/60 border border-red-800/80 rounded-xl text-red-200 text-xs sm:text-sm animate-pulse">
-            <div className="flex items-center gap-2.5">
-              <Flame className="w-4 h-4 text-red-400" />
-              <span className="font-bold tracking-wide">
-                TACTICAL SAR ACTIVE:
-              </span>
-              <span className="text-red-300">
-                Prioritizing human distress recognition, survivor isolation, and GPS ray-casting coordinates.
-              </span>
+        {/* 3-Minute Model Loading Fallback Prompt */}
+        {showCpuPrompt && !isModelReady && (
+          <div className="glass-surface-elevated p-4 rounded-2xl border border-amber-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xl">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-400/30 flex items-center justify-center text-amber-400 shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="font-bold text-xs text-amber-200">
+                  Model Loading Has Taken Over 3 Minutes
+                </div>
+                <p className="text-[11px] text-white/70 leading-relaxed">
+                  WebGL initialization or network download may be stalled by your browser. Would you like to switch to CPU Mode?
+                </p>
+              </div>
             </div>
-            <span className="font-mono text-xs font-bold text-red-400 hidden md:inline">
-              RELAY: ATAK / CoT SIMULATED
+            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
+              <button
+                onClick={handleSwitchToCpu}
+                className="tap-feedback flex-1 sm:flex-initial px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs transition shadow-md"
+              >
+                Switch to CPU Mode
+              </button>
+              <button
+                onClick={() => setShowCpuPrompt(false)}
+                className="tap-feedback px-3 py-1.5 rounded-xl glass-pill hover:bg-white/10 text-white/70 text-xs font-medium transition"
+              >
+                Keep Waiting
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Disaster Mode Tactile Alert Banner */}
+        {sarMode && (
+          <div className="glass-surface-elevated flex items-center justify-between p-4 rounded-2xl border border-red-500/30 text-white text-xs sm:text-sm shadow-lg shadow-red-950/20">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-xl bg-red-500/20 flex items-center justify-center text-red-400">
+                <Flame className="w-4.5 h-4.5 animate-pulse" />
+              </div>
+              <div>
+                <span className="font-bold tracking-wide text-red-400 mr-2">
+                  TACTICAL SAR ACTIVE:
+                </span>
+                <span className="text-white/80 subheadline">
+                  Survivors prioritized with monocular ray-casting GPS ground coordinates.
+                </span>
+              </div>
+            </div>
+            <span className="mono-metric text-[11px] font-bold text-red-400/90 hidden md:inline px-2.5 py-1 rounded-lg bg-red-950/60 border border-red-800/40">
+              ATAK / CoT SIMULATED
             </span>
           </div>
         )}
 
-        {/* Video Player & Tactical HUD */}
+        {/* Video Viewfinder Player & HUD */}
         <VideoPlayer
           model={model}
           confidenceThreshold={confidence}
@@ -119,7 +276,7 @@ export const App: React.FC = () => {
           }}
         />
 
-        {/* Tactical Control Bar */}
+        {/* Tactical Glass Control Bar */}
         <ControlBar
           confidence={confidence}
           onConfidenceChange={setConfidence}
@@ -131,190 +288,153 @@ export const App: React.FC = () => {
           currentTelemetry={currentTelemetry}
         />
 
-        {/* Architecture & Drone Integration Cards */}
+        {/* Apple Bento-Grid Architecture Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
           {/* Card 1: Live Hardware Acceleration */}
-          <div className="p-4 rounded-xl bg-gray-900/60 border border-gray-800/80 flex flex-col gap-2">
+          <div className="glass-surface p-5 rounded-3xl flex flex-col gap-2.5 transition-all hover:border-white/15">
             <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs uppercase tracking-wider">
               <Activity className="w-4 h-4" /> Client-Side WebGL Inference
             </div>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              Inference runs directly on your device’s GPU using WebGL shaders. No video frames are transmitted to cloud servers, providing zero latency and 100% privacy.
+            <p className="text-xs text-white/60 leading-relaxed subheadline">
+              Inference runs on-device using WebGL GPU shaders with zero server latency and total visual privacy.
             </p>
           </div>
 
           {/* Card 2: SAR Geolocation */}
-          <div className="p-4 rounded-xl bg-gray-900/60 border border-gray-800/80 flex flex-col gap-2">
+          <div className="glass-surface p-5 rounded-3xl flex flex-col gap-2.5 transition-all hover:border-white/15">
             <div className="flex items-center gap-2 text-amber-400 font-bold text-xs uppercase tracking-wider">
               <LifeBuoy className="w-4 h-4" /> Monocular Target Geolocation
             </div>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              When in SAR mode, bounding boxes are projected using camera intrinsics and simulated drone altitude/heading to estimate real-world WGS84 GPS ground coordinates.
+            <p className="text-xs text-white/60 leading-relaxed subheadline">
+              Ray-casting projects pixel centroids into real-world WGS84 coordinates using gimbal pitch and UAV altitude.
             </p>
           </div>
 
           {/* Card 3: Physical Drone Companion Edge */}
-          <div className="p-4 rounded-xl bg-gray-900/60 border border-gray-800/80 flex flex-col gap-2">
+          <div className="glass-surface p-5 rounded-3xl flex flex-col gap-2.5 transition-all hover:border-white/15">
             <div className="flex items-center gap-2 text-teal-400 font-bold text-xs uppercase tracking-wider">
               <Terminal className="w-4 h-4" /> Drone Edge Python Pipeline
             </div>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              For flying on physical drones (Jetson Orin / Raspberry Pi 5 + Hailo), the repository includes <code className="text-gray-200">python-edge/</code> running YOLO11 with MAVLink.
+            <p className="text-xs text-white/60 leading-relaxed subheadline">
+              Compatible with Jetson Orin and Raspberry Pi 5 + Hailo-8 running YOLO11 over MAVLink telemetry.
             </p>
           </div>
         </div>
       </main>
 
-      {/* Info & 80-Class Modal */}
+      {/* Apple-style Translucent Sheet Modal: Classes & Documentation */}
       {showInfoModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl max-w-2xl w-full max-h-[80vh] flex flex-col shadow-2xl">
-            <div className="p-5 border-b border-gray-800 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Layers className="w-5 h-5 text-emerald-400" />
-                <h3 className="font-bold text-base text-white">
-                  AeroVision Model Specifications & 80 Detectable Classes
-                </h3>
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="glass-surface-elevated rounded-3xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl border border-white/12 overflow-hidden transition-all animate-in fade-in zoom-in-95">
+            {/* Sheet Grab Bar */}
+            <div className="w-full flex justify-center pt-3 pb-1">
+              <div className="w-10 h-1 rounded-full bg-white/25" />
+            </div>
+
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-white/8 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400">
+                  <Layers className="w-4.5 h-4.5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white subheadline">
+                    Model Specifications & Detectable Classes
+                  </h3>
+                  <p className="text-[11px] text-white/50">COCO MobileNet V2 Benchmark</p>
+                </div>
               </div>
               <button
                 onClick={() => setShowInfoModal(false)}
-                className="text-gray-400 hover:text-white px-2 py-1 text-sm font-bold"
+                className="tap-feedback p-1.5 rounded-full hover:bg-white/10 text-white/60 hover:text-white transition"
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto text-xs text-gray-300 space-y-4 leading-relaxed">
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto text-xs text-white/75 space-y-5 leading-relaxed">
+              {/* Overview */}
               <div>
-                <h4 className="font-bold text-emerald-400 text-sm mb-1">
-                  1. How Disaster Detection Works
+                <h4 className="font-bold text-emerald-400 text-xs uppercase tracking-wider mb-1.5">
+                  1. Real-Time Geolocation Ray-Casting
                 </h4>
-                <p>
-                  The model performs live object localization, classification, and confidence scoring at 30–60 FPS. In <strong>SAR Mode</strong>, the pipeline applies monocular ray-casting to compute estimated target latitude/longitude coordinates based on camera focal length, pitch angle, and UAV altitude AGL.
+                <p className="text-white/60 leading-relaxed subheadline">
+                  In <strong>SAR Mode</strong>, pixel coordinates are mapped through focal length and sensor pitch against drone altitude AGL to calculate estimated WGS84 GPS latitude and longitude coordinates.
                 </p>
               </div>
 
+              {/* Class Explorer with Quick Search */}
               <div>
-                <h4 className="font-bold text-emerald-400 text-sm mb-1">
-                  2. Full Range of Detectable Objects (COCO 80 Benchmark)
-                </h4>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 text-[11px] font-mono">
-                  <span className="p-1.5 bg-red-950/70 border border-red-800 text-red-300 rounded font-bold">1. person (SAR)</span>
-                  <span className="p-1.5 bg-amber-950/70 border border-amber-800 text-amber-300 rounded font-bold">2. boat (SAR)</span>
-                  <span className="p-1.5 bg-gray-800 rounded">3. car</span>
-                  <span className="p-1.5 bg-gray-800 rounded">4. motorcycle</span>
-                  <span className="p-1.5 bg-gray-800 rounded">5. airplane</span>
-                  <span className="p-1.5 bg-gray-800 rounded">6. bus</span>
-                  <span className="p-1.5 bg-gray-800 rounded">7. train</span>
-                  <span className="p-1.5 bg-gray-800 rounded">8. truck</span>
-                  <span className="p-1.5 bg-gray-800 rounded">9. traffic light</span>
-                  <span className="p-1.5 bg-gray-800 rounded">10. fire hydrant</span>
-                  <span className="p-1.5 bg-amber-950/70 border border-amber-800 text-amber-300 rounded">11. backpack</span>
-                  <span className="p-1.5 bg-gray-800 rounded">12. umbrella</span>
-                  <span className="p-1.5 bg-gray-800 rounded">13. handbag</span>
-                  <span className="p-1.5 bg-gray-800 rounded">14. suitcase</span>
-                  <span className="p-1.5 bg-gray-800 rounded">15. frisbee</span>
-                  <span className="p-1.5 bg-gray-800 rounded">16. skis</span>
-                  <span className="p-1.5 bg-gray-800 rounded">17. snowboard</span>
-                  <span className="p-1.5 bg-gray-800 rounded">18. sports ball</span>
-                  <span className="p-1.5 bg-gray-800 rounded">19. kite</span>
-                  <span className="p-1.5 bg-gray-800 rounded">20. baseball bat</span>
-                  <span className="p-1.5 bg-gray-800 rounded">21. baseball glove</span>
-                  <span className="p-1.5 bg-gray-800 rounded">22. skateboard</span>
-                  <span className="p-1.5 bg-gray-800 rounded">23. surfboard</span>
-                  <span className="p-1.5 bg-gray-800 rounded">24. tennis racket</span>
-                  <span className="p-1.5 bg-gray-800 rounded">25. bottle</span>
-                  <span className="p-1.5 bg-gray-800 rounded">26. wine glass</span>
-                  <span className="p-1.5 bg-gray-800 rounded">27. cup</span>
-                  <span className="p-1.5 bg-gray-800 rounded">28. fork</span>
-                  <span className="p-1.5 bg-gray-800 rounded">29. knife</span>
-                  <span className="p-1.5 bg-gray-800 rounded">30. spoon</span>
-                  <span className="p-1.5 bg-gray-800 rounded">31. bowl</span>
-                  <span className="p-1.5 bg-gray-800 rounded">32. banana</span>
-                  <span className="p-1.5 bg-gray-800 rounded">33. apple</span>
-                  <span className="p-1.5 bg-gray-800 rounded">34. sandwich</span>
-                  <span className="p-1.5 bg-gray-800 rounded">35. orange</span>
-                  <span className="p-1.5 bg-gray-800 rounded">36. broccoli</span>
-                  <span className="p-1.5 bg-gray-800 rounded">37. carrot</span>
-                  <span className="p-1.5 bg-gray-800 rounded">38. hot dog</span>
-                  <span className="p-1.5 bg-gray-800 rounded">39. pizza</span>
-                  <span className="p-1.5 bg-gray-800 rounded">40. donut</span>
-                  <span className="p-1.5 bg-gray-800 rounded">41. cake</span>
-                  <span className="p-1.5 bg-gray-800 rounded">42. chair</span>
-                  <span className="p-1.5 bg-gray-800 rounded">43. couch</span>
-                  <span className="p-1.5 bg-gray-800 rounded">44. potted plant</span>
-                  <span className="p-1.5 bg-gray-800 rounded">45. bed</span>
-                  <span className="p-1.5 bg-gray-800 rounded">46. dining table</span>
-                  <span className="p-1.5 bg-gray-800 rounded">47. toilet</span>
-                  <span className="p-1.5 bg-gray-800 rounded">48. tv</span>
-                  <span className="p-1.5 bg-gray-800 rounded">49. laptop</span>
-                  <span className="p-1.5 bg-gray-800 rounded">50. mouse</span>
-                  <span className="p-1.5 bg-gray-800 rounded">51. remote</span>
-                  <span className="p-1.5 bg-gray-800 rounded">52. keyboard</span>
-                  <span className="p-1.5 bg-amber-950/70 border border-amber-800 text-amber-300 rounded font-bold">53. cell phone</span>
-                  <span className="p-1.5 bg-gray-800 rounded">54. microwave</span>
-                  <span className="p-1.5 bg-gray-800 rounded">55. oven</span>
-                  <span className="p-1.5 bg-gray-800 rounded">56. toaster</span>
-                  <span className="p-1.5 bg-gray-800 rounded">57. sink</span>
-                  <span className="p-1.5 bg-gray-800 rounded">58. refrigerator</span>
-                  <span className="p-1.5 bg-gray-800 rounded">59. book</span>
-                  <span className="p-1.5 bg-gray-800 rounded">60. clock</span>
-                  <span className="p-1.5 bg-gray-800 rounded">61. vase</span>
-                  <span className="p-1.5 bg-gray-800 rounded">62. scissors</span>
-                  <span className="p-1.5 bg-gray-800 rounded">63. teddy bear</span>
-                  <span className="p-1.5 bg-gray-800 rounded">64. hair drier</span>
-                  <span className="p-1.5 bg-gray-800 rounded">65. toothbrush</span>
-                  <span className="p-1.5 bg-gray-800 rounded">66. bird</span>
-                  <span className="p-1.5 bg-gray-800 rounded">67. cat</span>
-                  <span className="p-1.5 bg-amber-950/70 border border-amber-800 text-amber-300 rounded">68. dog</span>
-                  <span className="p-1.5 bg-gray-800 rounded">69. horse</span>
-                  <span className="p-1.5 bg-gray-800 rounded">70. sheep</span>
-                  <span className="p-1.5 bg-gray-800 rounded">71. cow</span>
-                  <span className="p-1.5 bg-gray-800 rounded">72. elephant</span>
-                  <span className="p-1.5 bg-gray-800 rounded">73. bear</span>
-                  <span className="p-1.5 bg-gray-800 rounded">74. zebra</span>
-                  <span className="p-1.5 bg-gray-800 rounded">75. giraffe</span>
-                  <span className="p-1.5 bg-gray-800 rounded">76. bicycle</span>
-                  <span className="p-1.5 bg-gray-800 rounded">77. stop sign</span>
-                  <span className="p-1.5 bg-gray-800 rounded">78. parking meter</span>
-                  <span className="p-1.5 bg-gray-800 rounded">79. bench</span>
-                  <span className="p-1.5 bg-gray-800 rounded">80. toaster</span>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="font-bold text-emerald-400 text-xs uppercase tracking-wider">
+                    2. Detectable Objects ({filteredClasses.length} shown)
+                  </h4>
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-2.5 top-2 text-white/40" />
+                    <input
+                      type="text"
+                      placeholder="Search class..."
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      className="pl-8 pr-3 py-1 text-xs rounded-xl bg-black/40 border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-emerald-400/50"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 max-h-56 overflow-y-auto p-1 text-[11px] mono-metric">
+                  {filteredClasses.map((cls, idx) => {
+                    const isSAR = ['person', 'boat', 'backpack', 'cell phone', 'dog'].includes(cls);
+                    return (
+                      <span
+                        key={cls}
+                        className={`p-1.5 rounded-lg flex items-center justify-between ${
+                          isSAR
+                            ? 'bg-amber-500/20 text-amber-200 border border-amber-400/30 font-semibold'
+                            : 'glass-pill text-white/70'
+                        }`}
+                      >
+                        <span>{idx + 1}. {cls}</span>
+                        {isSAR && <span className="text-[9px] px-1 rounded bg-amber-500/40 text-amber-100">SAR</span>}
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
 
+              {/* Export Info */}
               <div>
-                <h4 className="font-bold text-emerald-400 text-sm mb-1">
-                  3. Exporting to First Responders (ATAK / TAK Server)
+                <h4 className="font-bold text-emerald-400 text-xs uppercase tracking-wider mb-1.5">
+                  3. Exporting to ATAK / TAK Server
                 </h4>
-                <p>
-                  Clicking <strong>Export GeoJSON</strong> generates standard geospatial point features containing target ID, WGS84 GPS coordinates, confidence, and timestamp, compatible with QGroundControl, ATAK, and GIS dispatch platforms.
+                <p className="text-white/60 leading-relaxed subheadline">
+                  The <strong>Export GeoJSON</strong> button packages all verified targets into standard GIS point geometries ready for import into ATAK, QGroundControl, or ESRI ArcGIS.
                 </p>
               </div>
             </div>
 
-            <div className="p-4 border-t border-gray-800 flex justify-end">
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-white/8 flex justify-end bg-black/20">
               <button
                 onClick={() => setShowInfoModal(false)}
-                className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold transition"
+                className="tap-feedback px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold shadow-md transition"
               >
-                Close
+                Dismiss
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Footer */}
-      <footer className="border-t border-gray-800/80 bg-gray-950 px-6 py-4 text-xs text-gray-500 flex flex-wrap items-center justify-between gap-3">
+      {/* Apple-style Translucent Footer */}
+      <footer className="border-t border-white/8 px-6 py-4 text-xs text-white/40 flex flex-wrap items-center justify-between gap-3 mt-auto">
         <div className="flex items-center gap-2">
           <span>AeroVision SAR Mission Control</span>
           <span>•</span>
-          <span>Open-Source Live Vision</span>
+          <span className="text-emerald-400/80">Fluid Apple Design</span>
         </div>
-        <div className="flex items-center gap-4">
-          <span className="text-gray-400 font-mono">
-            Deployed on Vercel
-          </span>
+        <div className="flex items-center gap-4 mono-metric text-[11px]">
+          <span>Privacy Verified (Zero Server Upload)</span>
         </div>
       </footer>
     </div>
@@ -322,3 +442,4 @@ export const App: React.FC = () => {
 };
 
 export default App;
+
