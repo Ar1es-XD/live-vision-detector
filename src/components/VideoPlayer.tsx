@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
-import { Detection, FilterCategory, detectFrame } from '../utils/detector';
+import { Detection, FilterCategory, detectFrame, SAR_ESSENTIAL_CLASSES } from '../utils/detector';
 import { TacticalHUD } from './TacticalHUD';
 import { DroneTelemetry, getSimulatedTelemetry } from '../utils/sarTelemetry';
 import { Camera, Video, Upload, AlertCircle, RefreshCw, Radio } from 'lucide-react';
@@ -27,6 +27,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const simCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const [detections, setDetections] = useState<Detection[]>([]);
   const [telemetry, setTelemetry] = useState<DroneTelemetry>(getSimulatedTelemetry(0));
@@ -40,8 +41,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const tickRef = useRef(0);
   const animationFrameId = useRef<number | null>(null);
 
+  // Stop Webcam - properly terminates browser MediaStream tracks and frees camera hardware
+  const stopWebcam = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      try {
+        videoRef.current.pause();
+      } catch {}
+      videoRef.current.srcObject = null;
+    }
+  }, []);
+
   // 1. Initialize Webcam Stream
   const startWebcam = useCallback(async () => {
+    stopWebcam();
     setCameraError(null);
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -56,11 +72,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         audio: false,
       });
 
+      streamRef.current = stream;
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
           if (videoRef.current) {
-            videoRef.current.play();
+            videoRef.current.play().catch(e => console.warn('Video play error:', e));
             setStreamDimensions({
               width: videoRef.current.videoWidth || 1280,
               height: videoRef.current.videoHeight || 720,
@@ -78,23 +96,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
       setCameraError(msg);
     }
-  }, []);
-
-  // Stop Webcam
-  const stopWebcam = useCallback(() => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-    }
-  }, []);
+  }, [stopWebcam]);
 
   // 2. Handle Source Switching
   useEffect(() => {
+    // Immediately clear stale detections from the previous feed
+    setDetections([]);
+
     if (videoSourceType === 'webcam') {
       startWebcam();
     } else {
       stopWebcam();
+      if (videoSourceType === 'simulation') {
+        setStreamDimensions({ width: 1280, height: 720 });
+      }
     }
 
     return () => {
@@ -110,7 +125,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!canvas) return;
     canvas.width = 1280;
     canvas.height = 720;
-    setStreamDimensions({ width: 1280, height: 720 });
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -175,41 +189,81 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => cancelAnimationFrame(simLoopId);
   }, [videoSourceType]);
 
-  // 4. Main AI Inference Loop
+  // 4. Main AI Inference & Simulation Loop
   useEffect(() => {
     let isRunning = true;
 
     const runInference = async () => {
       if (!isRunning) return;
 
-      const sourceElement =
-        videoSourceType === 'simulation'
-          ? simCanvasRef.current
-          : videoRef.current;
+      // Update simulated drone telemetry
+      tickRef.current += 1;
+      const currentTelemetry = getSimulatedTelemetry(tickRef.current);
+      setTelemetry(currentTelemetry);
 
-      if (model && sourceElement) {
-        // Calculate FPS
-        frameCountRef.current += 1;
-        const now = performance.now();
-        const elapsed = now - lastTimeRef.current;
-        if (elapsed >= 500) {
-          setFps((frameCountRef.current * 1000) / elapsed);
-          frameCountRef.current = 0;
-          lastTimeRef.current = now;
-        }
-
-        // Update simulated telemetry
-        tickRef.current += 1;
-        const currentTelemetry = getSimulatedTelemetry(tickRef.current);
-        setTelemetry(currentTelemetry);
-
-        // Run detection
-        const results = await detectFrame(model, sourceElement, confidenceThreshold, filterCategory);
-        setDetections(results);
-        onDetectionsUpdate?.(results, currentTelemetry);
+      // Track FPS
+      frameCountRef.current += 1;
+      const now = performance.now();
+      const elapsed = now - lastTimeRef.current;
+      if (elapsed >= 500) {
+        setFps((frameCountRef.current * 1000) / elapsed);
+        frameCountRef.current = 0;
+        lastTimeRef.current = now;
       }
 
-      animationFrameId.current = requestAnimationFrame(runInference);
+      if (videoSourceType === 'simulation') {
+        // Procedural targets matching the simulated aerial camera
+        const tick = tickRef.current;
+        const personX = 580 + Math.sin(tick * 0.02) * 15;
+        const personY = 320 + Math.cos(tick * 0.02) * 10;
+        const boatX = 350 + (tick * 1.2) % 600;
+        const boatY = 420 + Math.sin(tick * 0.05) * 12;
+
+        const simDetections: Detection[] = [
+          {
+            bbox: [personX - 22, personY - 26, 44, 52] as [number, number, number, number],
+            class: 'person',
+            score: 0.95,
+          },
+          {
+            bbox: [boatX - 35, boatY - 16, 70, 32] as [number, number, number, number],
+            class: 'boat',
+            score: 0.89,
+          },
+          {
+            bbox: [845, 175, 75, 42] as [number, number, number, number],
+            class: 'car',
+            score: 0.84,
+          },
+        ].filter(d => {
+          if (d.score < confidenceThreshold) return false;
+          if (filterCategory === 'person_only') return d.class === 'person';
+          if (filterCategory === 'sar_essentials') return SAR_ESSENTIAL_CLASSES.has(d.class);
+          return true;
+        });
+
+        if (isRunning) {
+          setDetections(simDetections);
+          onDetectionsUpdate?.(simDetections, currentTelemetry);
+        }
+      } else {
+        const sourceElement = videoRef.current;
+        if (model && sourceElement && sourceElement.readyState >= 2) {
+          try {
+            const results = await detectFrame(model, sourceElement, confidenceThreshold, filterCategory);
+            if (isRunning) {
+              setDetections(results);
+              onDetectionsUpdate?.(results, currentTelemetry);
+            }
+          } catch (err) {
+            console.error('Detection error:', err);
+          }
+        }
+      }
+
+      if (isRunning) {
+        animationFrameId.current = requestAnimationFrame(runInference);
+      }
     };
 
     runInference();
@@ -224,13 +278,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      stopWebcam();
       const url = URL.createObjectURL(file);
       onSourceChange('upload');
       if (videoRef.current) {
         videoRef.current.srcObject = null;
         videoRef.current.src = url;
         videoRef.current.loop = true;
-        videoRef.current.play();
+        videoRef.current.play().catch(err => console.warn('File video play error:', err));
       }
     }
   };
@@ -239,20 +294,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     <div className="relative w-full rounded-3xl overflow-hidden glass-surface-elevated shadow-2xl transition-all">
       {/* Video Viewfinder Viewport */}
       <div ref={containerRef} className="relative aspect-video w-full bg-black flex items-center justify-center overflow-hidden">
-        {videoSourceType === 'simulation' ? (
-          <canvas
-            ref={simCanvasRef}
-            className="w-full h-full object-contain"
-          />
-        ) : (
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            autoPlay
-            className="w-full h-full object-contain"
-          />
-        )}
+        <canvas
+          ref={simCanvasRef}
+          width={1280}
+          height={720}
+          className={`w-full h-full object-contain ${
+            videoSourceType === 'simulation' ? 'block' : 'hidden'
+          }`}
+        />
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          autoPlay
+          className={`w-full h-full object-contain ${
+            videoSourceType !== 'simulation' ? 'block' : 'hidden'
+          }`}
+        />
 
         {/* Floating Top Viewfinder Pill Indicators */}
         <div className="absolute top-4 left-4 z-20 flex items-center gap-2 pointer-events-none">
@@ -323,6 +381,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* Apple Segmented Switcher */}
           <div className="inline-flex rounded-2xl bg-black/50 p-1 border border-white/8 shadow-inner">
             <button
+              type="button"
               onClick={() => onSourceChange('webcam')}
               className={`tap-feedback flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all ${
                 videoSourceType === 'webcam'
@@ -334,6 +393,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <span>Webcam</span>
             </button>
             <button
+              type="button"
               onClick={() => onSourceChange('simulation')}
               className={`tap-feedback flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all ${
                 videoSourceType === 'simulation'

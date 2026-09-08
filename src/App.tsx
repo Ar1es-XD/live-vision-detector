@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import { initModel, reloadModel, FilterCategory, Detection } from './utils/detector';
 import { DroneTelemetry, getSimulatedTelemetry } from './utils/sarTelemetry';
@@ -52,6 +52,16 @@ export const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const lastPingTime = useRef<number>(0);
+
+  const handleDetectionsUpdate = useCallback((dets: Detection[], telem: DroneTelemetry) => {
+    setCurrentDetections(dets);
+    setCurrentTelemetry(telem);
+  }, []);
+
+  const handleSourceChange = useCallback((source: 'webcam' | 'simulation' | 'upload') => {
+    setCurrentDetections([]);
+    setVideoSourceType(source);
+  }, []);
 
   // Initialize TensorFlow.js and COCO-SSD
   useEffect(() => {
@@ -269,11 +279,8 @@ export const App: React.FC = () => {
           filterCategory={filterCategory}
           sarMode={sarMode}
           videoSourceType={videoSourceType}
-          onSourceChange={setVideoSourceType}
-          onDetectionsUpdate={(dets, telem) => {
-            setCurrentDetections(dets);
-            setCurrentTelemetry(telem);
-          }}
+          onSourceChange={handleSourceChange}
+          onDetectionsUpdate={handleDetectionsUpdate}
         />
 
         {/* Tactical Glass Control Bar */}
