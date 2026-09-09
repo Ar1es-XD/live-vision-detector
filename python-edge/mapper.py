@@ -166,9 +166,15 @@ class MonocularObstacleProjector:
     using monocular pinhole ray-casting geometry.
     """
 
-    def __init__(self, hfov_deg: float = 65.0, assumed_camera_height: float = 1.8):
+    def __init__(
+        self,
+        hfov_deg: float = 65.0,
+        assumed_camera_height: float = 1.8,
+        camera_pitch_deg: float = 0.0,
+    ):
         self.hfov_rad = math.radians(hfov_deg)
         self.camera_height = assumed_camera_height
+        self.pitch_rad = math.radians(camera_pitch_deg)
 
     def project_detection(
         self,
@@ -194,16 +200,24 @@ class MonocularObstacleProjector:
         world_bearing_rad = math.radians(drone_heading_deg) + bearing_offset_rad
 
         # 2. Monocular Distance Estimation
+        # Fix: Horizontal FOV corresponds to frame_width
         box_h = max(1, y2 - y1)
         object_real_height = 1.7 if is_target else 1.0
-        focal_px = (frame_height / 2.0) / math.tan(self.hfov_rad / 2.0)
+        focal_px = (frame_width / 2.0) / math.tan(self.hfov_rad / 2.0)
         dist_scale = (focal_px * object_real_height) / max(10, box_h)
 
-        bottom_ratio = y2 / max(1, frame_height)
-        dist_ground = self.camera_height / max(0.2, (bottom_ratio * 0.9 + 0.1))
+        # Ground intersection calculation accounting for camera pitch
+        cy_offset = y2 - (frame_height / 2.0)
+        alpha = math.atan(cy_offset / max(1.0, focal_px))
+        total_elevation = alpha + self.pitch_rad
 
-        raw_distance = 0.6 * dist_scale + 0.4 * dist_ground
-        distance = float(np.clip(raw_distance, 0.6, 4.8))
+        if total_elevation > 0.05:
+            dist_ground = self.camera_height / math.tan(total_elevation)
+            raw_distance = 0.6 * dist_scale + 0.4 * dist_ground
+        else:
+            raw_distance = dist_scale
+
+        distance = float(np.clip(raw_distance, 0.5, 9.5))
 
         # 3. Compute World Coordinates
         world_x = drone_x + distance * math.sin(world_bearing_rad)
@@ -317,6 +331,24 @@ class ReactiveAvoidanceEngine:
                     "speed": 0.5,
                     "urgency": "MEDIUM",
                 }
+
+        # Check lateral flanks for close hazards
+        if left_clearance < 1.3:
+            return {
+                "status": "NUDGE_RIGHT",
+                "message": f"HAZARD LEFT FLANK ({left_clearance:.1f}m) -> STEER RIGHT +20°",
+                "steer_deg": 20.0,
+                "speed": 0.6,
+                "urgency": "LOW",
+            }
+        elif right_clearance < 1.3:
+            return {
+                "status": "NUDGE_LEFT",
+                "message": f"HAZARD RIGHT FLANK ({right_clearance:.1f}m) -> STEER LEFT -20°",
+                "steer_deg": -20.0,
+                "speed": 0.6,
+                "urgency": "LOW",
+            }
 
         # Standoff Approach phase vs Search Site phase
         if drone_y < self.site_y_start:

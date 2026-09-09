@@ -25,55 +25,114 @@ CONFIG_FILE = os.path.join(os.path.dirname(__file__), ".crop_config.json")
 def find_macos_window(keyword: str):
     """
     Search for on-screen macOS windows containing `keyword` in owner or window name.
+    Tries Quartz first if available, then falls back to built-in osascript (zero-dependency).
     Returns dict: {'x': int, 'y': int, 'w': int, 'h': int, 'title': str, 'owner': str} or None.
     """
+    # 1. Try PyObjC Quartz if installed
     try:
-        from ctypes import c_void_p, c_uint32, c_int
-        cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
-        cf = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        import Quartz
+        window_info_list = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID
+        )
+        for w in window_info_list:
+            owner = str(w.get(Quartz.kCGWindowOwnerName, ""))
+            name = str(w.get(Quartz.kCGWindowName, ""))
+            combined = f"{owner} {name}".lower()
+            if keyword.lower() in combined:
+                bounds = w.get(Quartz.kCGWindowBounds, {})
+                width = int(bounds.get("Width", 0))
+                height = int(bounds.get("Height", 0))
+                if width > 100 and height > 100:
+                    return {
+                        "x": int(bounds.get("X", 0)),
+                        "y": int(bounds.get("Y", 0)),
+                        "w": width,
+                        "h": height,
+                        "title": name or owner,
+                        "owner": owner,
+                    }
+    except Exception:
+        pass
 
-        # CoreFoundation functions
-        cf.CFArrayGetCount.restype = c_int
-        cf.CFArrayGetCount.argtypes = [c_void_p]
-        cf.CFArrayGetValueAtIndex.restype = c_void_p
-        cf.CFArrayGetValueAtIndex.argtypes = [c_void_p, c_int]
+    # 2. Fallback to built-in macOS osascript (zero extra dependencies)
+    import subprocess
+    script = f'''
+    tell application "System Events"
+        set appList to (name of every process where background only is false)
+        repeat with appName in appList
+            if (appName as text) contains "{keyword}" then
+                tell process appName
+                    if (count of windows) > 0 then
+                        set winPos to position of window 1
+                        set winSize to size of window 1
+                        return (item 1 of winPos as text) & "," & (item 2 of winPos as text) & "," & (item 1 of winSize as text) & "," & (item 2 of winSize as text) & "," & appName
+                    end if
+                end tell
+            end if
+        end repeat
+    end tell
+    return ""
+    '''
+    try:
+        res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=2)
+        out = res.stdout.strip()
+        if out and "," in out:
+            parts = [p.strip() for p in out.split(",")]
+            if len(parts) >= 4:
+                x, y, w, h = int(float(parts[0])), int(float(parts[1])), int(float(parts[2])), int(float(parts[3]))
+                owner = parts[4] if len(parts) > 4 else keyword
+                if w > 100 and h > 100:
+                    return {"x": x, "y": y, "w": w, "h": h, "title": owner, "owner": owner}
+    except Exception:
+        pass
 
-        # Query on-screen windows
-        kCGWindowListOptionOnScreenOnly = 1
-        kCGNullWindowID = 0
-        cg.CGWindowListCopyWindowInfo.restype = c_void_p
-        cg.CGWindowListCopyWindowInfo.argtypes = [c_uint32, c_uint32]
+    return None
 
-        win_list = cg.CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)
-        if not win_list:
-            return None
 
-        try:
-            import Quartz
-            window_info_list = Quartz.CGWindowListCopyWindowInfo(
-                Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID
-            )
-            for w in window_info_list:
-                owner = str(w.get(Quartz.kCGWindowOwnerName, ""))
-                name = str(w.get(Quartz.kCGWindowName, ""))
-                combined = f"{owner} {name}".lower()
-                if keyword.lower() in combined:
-                    bounds = w.get(Quartz.kCGWindowBounds, {})
-                    width = int(bounds.get("Width", 0))
-                    height = int(bounds.get("Height", 0))
-                    if width > 100 and height > 100:
-                        return {
-                            "x": int(bounds.get("X", 0)),
-                            "y": int(bounds.get("Y", 0)),
-                            "w": width,
-                            "h": height,
-                            "title": name or owner,
-                            "owner": owner,
-                        }
-        except ImportError:
-            pass
-    except Exception as e:
-        print(f"[WARN] macOS window search error: {e}")
+def find_windows_window(keyword: str):
+    """
+    Search for on-screen Windows windows containing `keyword` in title.
+    Uses ctypes and user32 (zero external dependencies).
+    """
+    import sys
+    if sys.platform != "win32":
+        return None
+
+    try:
+        user32 = ctypes.windll.user32
+
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.c_long),
+                ("top", ctypes.c_long),
+                ("right", ctypes.c_long),
+                ("bottom", ctypes.c_long),
+            ]
+
+        found = []
+
+        def enum_cb(hwnd, lparam):
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buf, length + 1)
+                    title = buf.value
+                    if keyword.lower() in title.lower():
+                        rect = RECT()
+                        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                        w = rect.right - rect.left
+                        h = rect.bottom - rect.top
+                        if w > 100 and h > 100:
+                            found.append({"x": rect.left, "y": rect.top, "w": w, "h": h, "title": title, "owner": title})
+            return True
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+        if found:
+            return found[0]
+    except Exception:
+        pass
     return None
 
 
@@ -110,8 +169,8 @@ class WindowStreamGrabber:
                 print(f"[CAPTURE] Explicit region configured: {self.region}")
                 return
 
-        # 2. Try to find window automatically on macOS
-        auto_win = find_macos_window(self.target)
+        # 2. Try to find window automatically on OS
+        auto_win = find_macos_window(self.target) or find_windows_window(self.target)
         if auto_win:
             self.region = {
                 "left": auto_win["x"],
@@ -234,6 +293,12 @@ def create_capture_source(source_arg: str):
         cap = cv2.VideoCapture(idx)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if not cap.isOpened():
+            print(f"[WARN] Camera #{idx} could not be opened directly. Trying default index 0...")
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                raise RuntimeError(f"Could not open camera device index {idx} or default camera.")
         return cap, f"Camera #{idx}"
 
     # 2. Network video stream (UDP, RTSP, HTTP) or video file
@@ -242,8 +307,11 @@ def create_capture_source(source_arg: str):
         (".mp4", ".avi", ".mov", ".mkv")
     ):
         print(f"[SOURCE] Connecting to stream URL: {source_arg}...")
-        # For UDP/RTSP, optimize OpenCV backend flags for low latency
+        # Optimize OpenCV backend for lowest frame-buffer latency on live streams
         cap = cv2.VideoCapture(source_arg, cv2.CAP_FFMPEG)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if not cap.isOpened():
+            raise RuntimeError(f"Could not connect to video stream: {source_arg}")
         return cap, f"Stream: {source_arg}"
 
     # 3. Emulator Window / Desktop Region Capture

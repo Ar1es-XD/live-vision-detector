@@ -3,11 +3,30 @@ YOLO11 Edge Inference Engine for Physical Drone Deployment
 Supports Apple Silicon GPU (MPS), NVIDIA CUDA, and CPU.
 """
 import time
-import torch
-from ultralytics import YOLO
+
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    torch = None
+    HAS_TORCH = False
+
+try:
+    from ultralytics import YOLO
+    HAS_YOLO = True
+except ImportError:
+    YOLO = None
+    HAS_YOLO = False
+
 
 class DroneEdgeDetector:
     def __init__(self, model_name: str = "yolo11n.pt", conf_threshold: float = 0.35):
+        if not HAS_TORCH or not HAS_YOLO:
+            raise RuntimeError(
+                "Packages 'torch' and 'ultralytics' are required for DroneEdgeDetector. "
+                "Install with: pip install -r requirements.txt"
+            )
+
         if torch.backends.mps.is_available():
             self.device = "mps"
         elif torch.cuda.is_available():
@@ -72,20 +91,35 @@ class DroneEdgeDetector:
     def format_target_telemetry(detections: list, frame_width: int, frame_height: int) -> dict:
         """
         Format detections into structured SAR / Drone telemetry payload.
+        Ensures all types are native Python primitives for safe JSON serialization.
         """
-        return {
-            "timestamp": time.time(),
-            "frame_dimensions": {"width": frame_width, "height": frame_height},
-            "total_targets": len(detections),
-            "targets": [
-                {
-                    "class": d["class_name"],
-                    "confidence": round(d["confidence"], 3),
-                    "bbox": [int(v) for v in d["bbox"]],
-                    "center": {"pixel": d["pixel_center"], "normalized": d["normalized_center"]},
-                    "offset": d["offset_from_center"]
+        targets = []
+        for d in detections:
+            target_entry = {
+                "class": str(d["class_name"]),
+                "confidence": round(float(d["confidence"]), 3),
+                "bbox": [int(v) for v in d["bbox"]],
+                "center": {
+                    "pixel": [int(d["pixel_center"][0]), int(d["pixel_center"][1])],
+                    "normalized": [float(d["normalized_center"][0]), float(d["normalized_center"][1])],
+                },
+                "offset": [int(d["offset_from_center"][0]), int(d["offset_from_center"][1])],
+            }
+            if "projection" in d and d["projection"]:
+                proj = d["projection"]
+                target_entry["projection"] = {
+                    "world_x": float(proj["world_x"]),
+                    "world_y": float(proj["world_y"]),
+                    "distance": float(proj["distance"]),
+                    "bearing_deg": float(proj["bearing_deg"]),
+                    "is_target": bool(proj["is_target"]),
                 }
-                for d in detections
-            ]
+            targets.append(target_entry)
+
+        return {
+            "timestamp": float(time.time()),
+            "frame_dimensions": {"width": int(frame_width), "height": int(frame_height)},
+            "total_targets": len(targets),
+            "targets": targets,
         }
 

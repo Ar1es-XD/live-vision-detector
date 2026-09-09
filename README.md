@@ -57,6 +57,11 @@ python main.py --source 0
 ```
 
 ### 🎮 Runtime Controls
+* **`[A]`**: Toggle **Autonomous Flight Navigation** (Active by default on launch)
+* **`[I] / [K]`** or **`[UP] / [DOWN]`**: Manual Forward / Reverse flight nudge
+* **`[J] / [L]`** or **`[LEFT] / [RIGHT]`**: Manual Yaw Left / Right
+* **`[M]`**: Toggle **10x10m Tactical Radar Minimap HUD** (PiP)
+* **`[R]`**: Reset **10x10m Spatial Map**
 * **`[W]`**: **Interactive Window Calibrate** — Click and drag a box around your emulator window
 * **`[S]`**: Toggle **SAR Tactical Drone Mode** (target reticle + normalized center coordinates)
 * **`[C]`**: Toggle **Humans Only Filter** vs All 80 Classes

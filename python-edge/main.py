@@ -7,6 +7,7 @@ import os
 import cv2
 import time
 import json
+import math
 import argparse
 import numpy as np
 
@@ -30,6 +31,7 @@ def draw_tactical_hud(
     grid_map: AreaGridMap,
     advisory: dict,
     show_minimap: bool = True,
+    auto_fly: bool = True,
 ) -> np.ndarray:
     """
     Renders high-contrast Tactical SAR HUD with bounding boxes, center coordinates,
@@ -143,15 +145,15 @@ def draw_tactical_hud(
     cv2.line(canvas, (0, banner_h), (w, banner_h), (50, 60, 75), 1)
 
     # Telemetry metrics
-    mode_str = "SAR TACTICAL ACTIVE" if sar_mode else "NORMAL SURVEILLANCE"
-    mode_color = (0, 0, 255) if sar_mode else (0, 230, 120)
+    mode_str = "SAR TACTICAL" if sar_mode else "SURVEILLANCE"
+    flight_str = "AUTO-NAV" if auto_fly else "PAUSED"
+    flight_color = (0, 255, 180) if auto_fly else (0, 180, 255)
     cov = grid_map.get_site_coverage_percentage()
     inside_tag = "INSIDE SITE" if grid_map.is_inside_search_site(grid_map.drone_x, grid_map.drone_y) else "APPROACH"
-    stat_left = f"AEROVISION SAR | {mode_str} | FPS: {fps:.1f} | SITE: {cov:.0f}% ({inside_tag})"
+    stat_left = f"AEROVISION | {mode_str} [{flight_str}] | FPS: {fps:.1f} | SITE: {cov:.0f}% ({inside_tag})"
     stat_right = f"POS: ({grid_map.drone_x:.1f}m, {grid_map.drone_y:.1f}m) HDG: {int(grid_map.heading_deg)}°"
 
-
-    cv2.putText(canvas, stat_left, (12, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.45, mode_color, 1, cv2.LINE_AA)
+    cv2.putText(canvas, stat_left, (12, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.44, flight_color, 1, cv2.LINE_AA)
     (rw, _), _ = cv2.getTextSize(stat_right, cv2.FONT_HERSHEY_SIMPLEX, 0.40, 1)
     cv2.putText(canvas, stat_right, (w - rw - 12, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (200, 200, 200), 1, cv2.LINE_AA)
 
@@ -194,8 +196,8 @@ def draw_tactical_hud(
     bot_overlay = canvas.copy()
     cv2.rectangle(bot_overlay, (0, h - bot_h), (w, h), (12, 16, 22), -1)
     cv2.addWeighted(bot_overlay, 0.85, canvas, 0.15, 0, canvas)
-    guide_text = "[Q] Quit  |  [S] SAR Mode  |  [C] Humans Only  |  [M] Toggle Map  |  [R] Reset Map  |  [W] Calibrate  |  [SPACE] Snapshot"
-    cv2.putText(canvas, guide_text, (12, h - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (160, 170, 185), 1, cv2.LINE_AA)
+    guide_text = "[Q] Quit | [A] Auto-Nav | [IJKL] Nudge | [S] SAR | [C] Humans | [M] Map | [R] Reset | [W] Calibrate | [SPACE] Snap"
+    cv2.putText(canvas, guide_text, (12, h - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (160, 170, 185), 1, cv2.LINE_AA)
 
     return canvas
 
@@ -249,9 +251,22 @@ def run():
         action="store_true",
         help="Hide the 10x10m radar minimap PiP by default",
     )
+    parser.add_argument(
+        "--no-auto-fly",
+        action="store_true",
+        help="Start with autonomous navigation paused instead of active on launch",
+    )
+    parser.add_argument(
+        "--camera-pitch",
+        type=float,
+        default=0.0,
+        help="Camera downward tilt angle in degrees. Default: 0.0 (level forward)",
+    )
     args = parser.parse_args()
 
     os.makedirs("captures", exist_ok=True)
+
+    auto_fly = not args.no_auto_fly
 
     print("=" * 65)
     print("  AEROVISION SAR - 10x10m AREA MAPPING & AVOIDANCE PIPELINE")
@@ -260,6 +275,8 @@ def run():
     print(f"  YOLO Model      : {args.model}")
     print(f"  Search Site     : {args.map_size}m x {args.map_size}m Square (100m²)")
     print(f"  Launch Standoff : {args.standoff}m South (Middle X={args.map_size/2.0:.1f}m, Y=0.2m)")
+    print(f"  Auto Navigation : {'ACTIVE (ON LAUNCH)' if auto_fly else 'PAUSED'}")
+    print(f"  Camera Pitch    : {args.camera_pitch}°")
     print(f"  Confidence      : {args.conf}")
     print(f"  SAR Mode        : {'ACTIVE' if args.sar else 'STANDBY'}")
     print(f"  Humans Only     : {'ENABLED' if args.humans else 'DISABLED'}")
@@ -277,14 +294,13 @@ def run():
         site_length=args.map_size,
         standoff_distance=args.standoff,
     )
-    projector = MonocularObstacleProjector(hfov_deg=65.0)
+    projector = MonocularObstacleProjector(hfov_deg=65.0, camera_pitch_deg=args.camera_pitch)
     avoidance_engine = ReactiveAvoidanceEngine(
         site_width=args.map_size,
         total_length=args.map_size + args.standoff,
         site_y_start=args.standoff,
     )
     show_minimap = not args.no_map
-
 
     # Initialize Capture Source
     source_handler, source_name = create_capture_source(args.source)
@@ -351,7 +367,18 @@ def run():
                 projected_obstacles=projected_obstacles,
             )
 
-            # 5. Render Tactical HUD with Minimap & Guidance Banner
+            # 5. Simulated Flight Navigation (Auto-Fly active or manual)
+            if auto_fly:
+                speed = float(advisory.get("speed", 0.0))
+                steer = float(advisory.get("steer_deg", 0.0))
+                step_dt = min(0.1, max(0.01, dt))
+                h_rad = math.radians(grid_map.heading_deg)
+                dx = speed * math.sin(h_rad) * step_dt
+                dy = speed * math.cos(h_rad) * step_dt
+                d_heading = steer * step_dt * 1.5
+                grid_map.update_drone_pose(dx=dx, dy=dy, d_heading=d_heading)
+
+            # 6. Render Tactical HUD with Minimap & Guidance Banner
             annotated_frame = draw_tactical_hud(
                 frame=frame,
                 detections=detections,
@@ -362,6 +389,7 @@ def run():
                 grid_map=grid_map,
                 advisory=advisory,
                 show_minimap=show_minimap,
+                auto_fly=auto_fly,
             )
 
             cv2.imshow(window_title, annotated_frame)
@@ -370,6 +398,19 @@ def run():
             if key == ord("q"):
                 print("[STOP] Exit requested by operator.")
                 break
+            elif key == ord("a"):
+                auto_fly = not auto_fly
+                print(f"[NAV] Autonomous Navigation: {'ACTIVE' if auto_fly else 'PAUSED'}")
+            elif key in (ord("i"), 82):  # 'i' or Up arrow: Forward nudge
+                h_rad = math.radians(grid_map.heading_deg)
+                grid_map.update_drone_pose(dx=0.35 * math.sin(h_rad), dy=0.35 * math.cos(h_rad))
+            elif key in (ord("k"), 84):  # 'k' or Down arrow: Back nudge
+                h_rad = math.radians(grid_map.heading_deg)
+                grid_map.update_drone_pose(dx=-0.35 * math.sin(h_rad), dy=-0.35 * math.cos(h_rad))
+            elif key in (ord("j"), 81):  # 'j' or Left arrow: Yaw left
+                grid_map.update_drone_pose(d_heading=-15.0)
+            elif key in (ord("l"), 83):  # 'l' or Right arrow: Yaw right
+                grid_map.update_drone_pose(d_heading=15.0)
             elif key == ord("s"):
                 sar_mode = not sar_mode
                 print(f"[MODE] SAR Tactical Mode: {'ACTIVE' if sar_mode else 'STANDBY'}")
@@ -405,16 +446,16 @@ def run():
                     "source": source_name,
                     "sar_mode": sar_mode,
                     "humans_only": humans_only,
+                    "auto_fly": auto_fly,
                     "fps": round(fps, 1),
                     "search_site_size": {"width": grid_map.site_width, "length": grid_map.site_length},
                     "standoff_distance": grid_map.standoff_distance,
-                    "drone_position": {"x": grid_map.drone_x, "y": grid_map.drone_y},
-                    "drone_heading": grid_map.heading_deg,
+                    "drone_position": {"x": round(grid_map.drone_x, 2), "y": round(grid_map.drone_y, 2)},
+                    "drone_heading": round(grid_map.heading_deg, 1),
                     "site_coverage_percent": grid_map.get_site_coverage_percentage(),
                     "is_inside_site": grid_map.is_inside_search_site(grid_map.drone_x, grid_map.drone_y),
                     "avoidance_advisory": advisory,
                 }
-
 
                 with open(json_path, "w") as f:
                     json.dump(telemetry_data, f, indent=2)
