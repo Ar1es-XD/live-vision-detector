@@ -2,6 +2,7 @@
 YOLO11 Edge Inference Engine for Physical Drone Deployment
 Supports Apple Silicon GPU (MPS), NVIDIA CUDA, and CPU.
 """
+import time
 import torch
 from ultralytics import YOLO
 
@@ -27,6 +28,7 @@ class DroneEdgeDetector:
         self.target_classes = [name_to_id[c] for c in class_names if c in name_to_id]
 
     def infer(self, frame):
+        h, w = frame.shape[:2]
         results = self.model.predict(
             source=frame,
             device=self.device,
@@ -40,11 +42,50 @@ class DroneEdgeDetector:
             boxes = results[0].boxes
             for box in boxes:
                 xyxy = box.xyxy[0].cpu().numpy().astype(int)
+                x1, y1, x2, y2 = xyxy
                 conf = float(box.conf[0].cpu().numpy())
                 cls_id = int(box.cls[0].cpu().numpy())
+                
+                # Calculate target center & normalized coordinates
+                cx = int((x1 + x2) / 2)
+                cy = int((y1 + y2) / 2)
+                box_w = int(x2 - x1)
+                box_h = int(y2 - y1)
+                norm_x = round(float(cx / max(1, w)), 4)
+                norm_y = round(float(cy / max(1, h)), 4)
+                offset_x = cx - (w // 2)
+                offset_y = cy - (h // 2)
+
                 detections.append({
                     "bbox": xyxy,
                     "confidence": conf,
                     "class_name": self.model.names[cls_id],
+                    "pixel_center": (cx, cy),
+                    "normalized_center": (norm_x, norm_y),
+                    "width": box_w,
+                    "height": box_h,
+                    "offset_from_center": (offset_x, offset_y),
                 })
         return detections
+
+    @staticmethod
+    def format_target_telemetry(detections: list, frame_width: int, frame_height: int) -> dict:
+        """
+        Format detections into structured SAR / Drone telemetry payload.
+        """
+        return {
+            "timestamp": time.time(),
+            "frame_dimensions": {"width": frame_width, "height": frame_height},
+            "total_targets": len(detections),
+            "targets": [
+                {
+                    "class": d["class_name"],
+                    "confidence": round(d["confidence"], 3),
+                    "bbox": [int(v) for v in d["bbox"]],
+                    "center": {"pixel": d["pixel_center"], "normalized": d["normalized_center"]},
+                    "offset": d["offset_from_center"]
+                }
+                for d in detections
+            ]
+        }
+
