@@ -36,4 +36,5 @@ venv/
 .venv/
 captures/
 *.pt
+.crop_config.json
 .vercel

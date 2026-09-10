@@ -35,18 +35,39 @@ npm run build
 
 ---
 
-## 🚁 Physical Drone Deployment (`python-edge/`)
+## 🚁 Physical Drone & Emulator Ingestion (`python-edge/`)
+
+Directly ingest live drone video from an Android emulator (BlueStacks / Nox / Studio) or RTSP/UDP stream without OBS or virtual cameras:
 
 ```bash
 cd python-edge
-pip install -r requirements.txt
-python main.py
+
+# 1. Activate environment
+source .venv/bin/activate
+
+# 2. Ingest directly from emulator window
+python main.py --source bluestacks
+
+# Or with specific window coordinates:
+python main.py --source "100,100,1280,720"
+
+# Or from direct network stream / camera:
+python main.py --source "udp://@0.0.0.0:1234"
+python main.py --source 0
 ```
 
-* **`[S]`**: Toggle SAR Drone Mode
-* **`[C]`**: Toggle Humans Only Filter
-* **`[SPACE]`**: Save High-Res Geotagged Snapshot
+### 🎮 Runtime Controls
+* **`[A]`**: Toggle **Autonomous Flight Navigation** (Active by default on launch)
+* **`[I] / [K]`** or **`[UP] / [DOWN]`**: Manual Forward / Reverse flight nudge
+* **`[J] / [L]`** or **`[LEFT] / [RIGHT]`**: Manual Yaw Left / Right
+* **`[M]`**: Toggle **10x10m Tactical Radar Minimap HUD** (PiP)
+* **`[R]`**: Reset **10x10m Spatial Map**
+* **`[W]`**: **Interactive Window Calibrate** — Click and drag a box around your emulator window
+* **`[S]`**: Toggle **SAR Tactical Drone Mode** (target reticle + normalized center coordinates)
+* **`[C]`**: Toggle **Humans Only Filter** vs All 80 Classes
+* **`[SPACE]`**: Save High-Res Snapshot + Companion **Telemetry JSON** with target coordinates
 * **`[Q]`**: Quit cleanly
+
 
 ---
 
